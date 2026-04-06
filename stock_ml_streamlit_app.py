@@ -1,572 +1,592 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
-from sklearn.neural_network import MLPRegressor
 import warnings
 warnings.filterwarnings('ignore')
 
-# Set page config
-st.set_page_config(page_title="Stock Price Prediction", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Stock Analyzer", layout="wide", initial_sidebar_state="expanded")
 
-# Custom CSS
 st.markdown("""
-    <style>
-    .main {
-        padding: 0rem 0rem;
-    }
-    .metric-box {
-        background-color: #f0f2f6;
-        padding: 20px;
-        border-radius: 10px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    </style>
+<style>
+[data-testid="stAppViewContainer"] { background: #0d1117; }
+[data-testid="stSidebar"] { background: #161b22; border-right: 1px solid #30363d; }
+[data-testid="stSidebar"] * { color: #e6edf3 !important; }
+.block-container { padding: 1.5rem 2rem; }
+h1, h2, h3, h4 { color: #e6edf3 !important; }
+p, label, div { color: #8b949e; }
+.stTabs [data-baseweb="tab-list"] { background: #161b22; border-radius: 8px; padding: 4px; gap: 4px; }
+.stTabs [data-baseweb="tab"] { background: transparent; color: #8b949e !important; border-radius: 6px; padding: 8px 20px; font-size: 0.85rem; }
+.stTabs [aria-selected="true"] { background: #21262d !important; color: #e6edf3 !important; }
+div[data-testid="metric-container"] {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 16px 20px;
+}
+div[data-testid="metric-container"] label { color: #8b949e !important; font-size: 0.75rem; }
+div[data-testid="metric-container"] [data-testid="stMetricValue"] { color: #e6edf3 !important; font-size: 1.4rem; font-weight: 700; }
+.stButton button {
+    background: linear-gradient(135deg, #238636, #2ea043);
+    color: white !important;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 24px;
+    font-weight: 600;
+    width: 100%;
+}
+.stSelectbox > div > div { background: #21262d !important; border: 1px solid #30363d !important; color: #e6edf3 !important; }
+</style>
 """, unsafe_allow_html=True)
 
-# =====================================================
-# FUNCTION DEFINITIONS
-# =====================================================
-
-@st.cache_data
-def load_data(file_paths):
-    """Load and concatenate CSV files"""
-    dfs = []
-    for file_path in file_paths:
-        try:
-            df = pd.read_csv(file_path)
-            dfs.append(df)
-        except Exception as e:
-            st.warning(f"Could not load {file_path}: {e}")
-    
-    if dfs:
-        combined_df = pd.concat(dfs, axis=0, ignore_index=True)
-        if 'Unnamed: 0' in combined_df.columns:
-            combined_df = combined_df.drop('Unnamed: 0', axis=1)
-        combined_df['Date'] = pd.to_datetime(combined_df['Date'])
-        combined_df = combined_df.sort_values('Date').reset_index(drop=True)
-        return combined_df
-    return None
+# ── Feature engineering ───────────────────────────────────────────────────────
 
 def engineer_features(df):
-    """Create technical indicators and features for ML"""
     df = df.copy()
-    
-    # Basic price features
-    df['Price_Change'] = df['Close'].diff()
+    df['Price_Change']     = df['Close'].diff()
     df['Price_Change_Pct'] = df['Close'].pct_change() * 100
-    df['Daily_Return'] = df['Close'].pct_change()
-    
-    # Moving Averages
-    df['MA_7'] = df['Close'].rolling(window=7).mean()
-    df['MA_14'] = df['Close'].rolling(window=14).mean()
-    df['MA_30'] = df['Close'].rolling(window=30).mean()
-    
-    # Exponential Moving Average
+    df['Daily_Return']     = df['Close'].pct_change()
+    df['MA_7']   = df['Close'].rolling(7).mean()
+    df['MA_14']  = df['Close'].rolling(14).mean()
+    df['MA_30']  = df['Close'].rolling(30).mean()
+    df['MA_50']  = df['Close'].rolling(50).mean()
     df['EMA_12'] = df['Close'].ewm(span=12, adjust=False).mean()
     df['EMA_26'] = df['Close'].ewm(span=26, adjust=False).mean()
-    
-    # MACD
-    df['MACD'] = df['EMA_12'] - df['EMA_26']
+    df['MACD']        = df['EMA_12'] - df['EMA_26']
     df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
-    
-    # Momentum
-    df['Momentum'] = df['Close'] - df['Close'].shift(10)
-    
-    # Volatility (Standard Deviation)
-    df['Volatility'] = df['Daily_Return'].rolling(window=14).std() * 100
-    
-    # RSI (Relative Strength Index)
+    df['Momentum']    = df['Close'] - df['Close'].shift(10)
+    df['Volatility']  = df['Daily_Return'].rolling(14).std() * 100
     delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df['RSI'] = 100 - (100 / (1 + rs))
-    
-    # Bollinger Bands
-    df['BB_Middle'] = df['Close'].rolling(window=20).mean()
-    bb_std = df['Close'].rolling(window=20).std()
-    df['BB_Upper'] = df['BB_Middle'] + (bb_std * 2)
-    df['BB_Lower'] = df['BB_Middle'] - (bb_std * 2)
-    df['BB_Width'] = df['BB_Upper'] - df['BB_Lower']
-    
-    # High-Low Range
-    df['HL_Range'] = df['High'] - df['Low']
-    df['HL_Ratio'] = df['HL_Range'] / df['Close']
-    
-    # Volume features
+    gain  = delta.where(delta > 0, 0).rolling(14).mean()
+    loss  = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    df['RSI'] = 100 - (100 / (1 + gain / loss))
+    df['BB_Middle'] = df['Close'].rolling(20).mean()
+    bb_std = df['Close'].rolling(20).std()
+    df['BB_Upper']  = df['BB_Middle'] + bb_std * 2
+    df['BB_Lower']  = df['BB_Middle'] - bb_std * 2
+    df['BB_Width']  = df['BB_Upper'] - df['BB_Lower']
+    df['HL_Range']  = df['High'] - df['Low']
+    df['HL_Ratio']  = df['HL_Range'] / df['Close']
     if 'Volume' in df.columns:
-        df['Volume_MA'] = df['Volume'].rolling(window=7).mean()
+        df['Volume_MA']    = df['Volume'].rolling(7).mean()
         df['Volume_Ratio'] = df['Volume'] / df['Volume_MA']
-    
-    # Price position relative to MA
-    df['Price_to_MA7'] = df['Close'] / df['MA_7']
+    df['Price_to_MA7']  = df['Close'] / df['MA_7']
     df['Price_to_MA30'] = df['Close'] / df['MA_30']
-    
-    # Drop NaN values created by rolling windows
-    df = df.dropna()
-    
-    return df
+    return df.dropna()
+
 
 def prepare_ml_data(df, lookback=30):
-    """Prepare data for machine learning with lookback window"""
-    features = ['Open', 'Close', 'High', 'Low', 'Price_Change', 'MA_7', 'MA_14', 
-                'MA_30', 'EMA_12', 'EMA_26', 'MACD', 'Momentum', 'Volatility', 
-                'RSI', 'BB_Upper', 'BB_Lower', 'HL_Range', 'Price_to_MA7', 'Price_to_MA30']
-    
-    # Check which features exist
-    available_features = [f for f in features if f in df.columns]
-    
-    X = df[available_features].values
+    features = ['Open','Close','High','Low','Price_Change','MA_7','MA_14',
+                'MA_30','EMA_12','EMA_26','MACD','Momentum','Volatility',
+                'RSI','BB_Upper','BB_Lower','HL_Range','Price_to_MA7','Price_to_MA30']
+    available = [f for f in features if f in df.columns]
+    X = df[available].values
     y = df['Close'].values
-    
-    # Normalize features
-    scaler = MinMaxScaler()
+    scaler   = MinMaxScaler()
     X_scaled = scaler.fit_transform(X)
-    
-    # Create sequences for time series
-    X_sequences = []
-    y_sequences = []
-    
+    Xs, ys = [], []
     for i in range(len(X_scaled) - lookback):
-        X_sequences.append(X_scaled[i:i+lookback].flatten())
-        y_sequences.append(y[i+lookback])
-    
-    return np.array(X_sequences), np.array(y_sequences), scaler, available_features
+        Xs.append(X_scaled[i:i+lookback].flatten())
+        ys.append(y[i+lookback])
+    return np.array(Xs), np.array(ys), scaler, available
+
 
 def train_models(X_train, y_train, X_test, y_test):
-    """Train multiple ML models"""
-    models = {}
-    results = {}
-    
-    # Linear Regression
-    lr = LinearRegression()
-    lr.fit(X_train, y_train)
-    lr_pred = lr.predict(X_test)
-    models['Linear Regression'] = lr
-    results['Linear Regression'] = {
-        'MAE': mean_absolute_error(y_test, lr_pred),
-        'RMSE': np.sqrt(mean_squared_error(y_test, lr_pred)),
-        'R2': r2_score(y_test, lr_pred),
-        'predictions': lr_pred
-    }
-    
-    # Random Forest
-    rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-    rf.fit(X_train, y_train)
-    rf_pred = rf.predict(X_test)
-    models['Random Forest'] = rf
-    results['Random Forest'] = {
-        'MAE': mean_absolute_error(y_test, rf_pred),
-        'RMSE': np.sqrt(mean_squared_error(y_test, rf_pred)),
-        'R2': r2_score(y_test, rf_pred),
-        'predictions': rf_pred
-    }
-    
-    # Gradient Boosting
-    gb = GradientBoostingRegressor(n_estimators=100, random_state=42)
-    gb.fit(X_train, y_train)
-    gb_pred = gb.predict(X_test)
-    models['Gradient Boosting'] = gb
-    results['Gradient Boosting'] = {
-        'MAE': mean_absolute_error(y_test, gb_pred),
-        'RMSE': np.sqrt(mean_squared_error(y_test, gb_pred)),
-        'R2': r2_score(y_test, gb_pred),
-        'predictions': gb_pred
-    }
-    
-    # Neural Network
-    nn = MLPRegressor(hidden_layer_sizes=(100, 50), max_iter=1000, random_state=42)
-    nn.fit(X_train, y_train)
-    nn_pred = nn.predict(X_test)
-    models['Neural Network'] = nn
-    results['Neural Network'] = {
-        'MAE': mean_absolute_error(y_test, nn_pred),
-        'RMSE': np.sqrt(mean_squared_error(y_test, nn_pred)),
-        'R2': r2_score(y_test, nn_pred),
-        'predictions': nn_pred
-    }
-    
+    models, results = {}, {}
+    for name, mdl in [
+        ('Linear Regression', LinearRegression()),
+        ('Random Forest',     RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)),
+        ('Gradient Boosting', GradientBoostingRegressor(n_estimators=100, random_state=42)),
+    ]:
+        mdl.fit(X_train, y_train)
+        pred = mdl.predict(X_test)
+        models[name]  = mdl
+        results[name] = {
+            'MAE':  mean_absolute_error(y_test, pred),
+            'RMSE': np.sqrt(mean_squared_error(y_test, pred)),
+            'R2':   r2_score(y_test, pred),
+            'predictions': pred
+        }
     return models, results
 
-def plot_predictions(y_test, results, title="Model Predictions Comparison"):
-    """Plot actual vs predicted values"""
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    axes = axes.ravel()
-    
-    for idx, (model_name, result) in enumerate(results.items()):
-        axes[idx].plot(y_test, label='Actual', linewidth=2, marker='o', markersize=4)
-        axes[idx].plot(result['predictions'], label='Predicted', linewidth=2, marker='s', markersize=4, alpha=0.7)
-        axes[idx].set_title(f"{model_name}\nR² = {result['R2']:.4f}", fontsize=12, fontweight='bold')
-        axes[idx].set_xlabel('Sample')
-        axes[idx].set_ylabel('Price')
-        axes[idx].legend()
-        axes[idx].grid(True, alpha=0.3)
-    
-    plt.tight_layout()
+
+# ── Pattern detection ─────────────────────────────────────────────────────────
+
+def detect_patterns(df):
+    patterns = []
+    if len(df) < 50:
+        return patterns
+
+    close = df['Close'].values
+    recent = close[-60:]
+
+    # Golden / Death Cross
+    if 'MA_7' in df.columns and 'MA_30' in df.columns:
+        ma7  = df['MA_7'].values
+        ma30 = df['MA_30'].values
+        if ma7[-1] > ma30[-1] and ma7[-5] <= ma30[-5]:
+            patterns.append({'name':'🟢 Golden Cross','type':'bullish',
+                'desc':'MA7 just crossed above MA30 — short-term momentum turning bullish.','signal':'BUY'})
+        elif ma7[-1] < ma30[-1] and ma7[-5] >= ma30[-5]:
+            patterns.append({'name':'🔴 Death Cross','type':'bearish',
+                'desc':'MA7 just crossed below MA30 — short-term momentum turning bearish.','signal':'SELL'})
+
+    # RSI levels
+    if 'RSI' in df.columns:
+        rsi = df['RSI'].values
+        if rsi[-1] < 30:
+            patterns.append({'name':'🟢 RSI Oversold','type':'bullish',
+                'desc':f'RSI at {rsi[-1]:.1f} — price may be oversold, potential reversal upward.','signal':'BUY'})
+        elif rsi[-1] > 70:
+            patterns.append({'name':'🔴 RSI Overbought','type':'bearish',
+                'desc':f'RSI at {rsi[-1]:.1f} — price may be overbought, potential pullback.','signal':'SELL'})
+
+    # Bollinger Band conditions
+    if 'BB_Width' in df.columns:
+        bw    = df['BB_Width'].values
+        avg_bw = np.mean(bw[-30:])
+        if bw[-1] < avg_bw * 0.6:
+            patterns.append({'name':'🟡 Bollinger Squeeze','type':'neutral',
+                'desc':'Bands are unusually narrow — a sharp breakout may be imminent.','signal':'WATCH'})
+        elif df['Close'].values[-1] > df['BB_Upper'].values[-1]:
+            patterns.append({'name':'🔴 BB Upper Breakout','type':'bearish',
+                'desc':'Price closed above upper Bollinger Band — possible mean reversion.','signal':'CAUTION'})
+        elif df['Close'].values[-1] < df['BB_Lower'].values[-1]:
+            patterns.append({'name':'🟢 BB Lower Bounce','type':'bullish',
+                'desc':'Price closed below lower Bollinger Band — potential bounce opportunity.','signal':'WATCH'})
+
+    # Double Top
+    window = recent[-40:]
+    peaks = [i for i in range(2, len(window)-2)
+             if window[i] > window[i-1] and window[i] > window[i-2]
+             and window[i] > window[i+1] and window[i] > window[i+2]]
+    if len(peaks) >= 2:
+        p1, p2 = peaks[-2], peaks[-1]
+        if abs(window[p1] - window[p2]) / window[p1] < 0.03 and (p2 - p1) >= 5:
+            patterns.append({'name':'🔴 Double Top','type':'bearish',
+                'desc':'Two similar peaks detected — classic bearish reversal pattern.','signal':'SELL'})
+
+    # Double Bottom
+    troughs = [i for i in range(2, len(window)-2)
+               if window[i] < window[i-1] and window[i] < window[i-2]
+               and window[i] < window[i+1] and window[i] < window[i+2]]
+    if len(troughs) >= 2:
+        t1, t2 = troughs[-2], troughs[-1]
+        if abs(window[t1] - window[t2]) / window[t1] < 0.03 and (t2 - t1) >= 5:
+            patterns.append({'name':'🟢 Double Bottom','type':'bullish',
+                'desc':'Two similar troughs detected — classic bullish reversal pattern.','signal':'BUY'})
+
+    # MACD crossover
+    if 'MACD' in df.columns and 'Signal_Line' in df.columns:
+        macd = df['MACD'].values
+        sig  = df['Signal_Line'].values
+        if macd[-1] > sig[-1] and macd[-3] <= sig[-3]:
+            patterns.append({'name':'🟢 MACD Bullish Crossover','type':'bullish',
+                'desc':'MACD line crossed above the signal line — bullish momentum building.','signal':'BUY'})
+        elif macd[-1] < sig[-1] and macd[-3] >= sig[-3]:
+            patterns.append({'name':'🔴 MACD Bearish Crossover','type':'bearish',
+                'desc':'MACD line crossed below the signal line — bearish momentum building.','signal':'SELL'})
+
+    # Trend (linear slope)
+    x     = np.arange(len(recent))
+    slope = np.polyfit(x, recent, 1)[0]
+    pct   = slope / recent[0] * 100
+    if pct > 0.15:
+        patterns.append({'name':'🟢 Uptrend','type':'bullish',
+            'desc':f'Steady uptrend detected (+{pct:.2f}% per day avg over last 60 sessions).','signal':'BUY'})
+    elif pct < -0.15:
+        patterns.append({'name':'🔴 Downtrend','type':'bearish',
+            'desc':f'Steady downtrend detected ({pct:.2f}% per day avg over last 60 sessions).','signal':'SELL'})
+
+    return patterns
+
+
+# ── Plotly helpers ────────────────────────────────────────────────────────────
+
+BASE = dict(
+    template='plotly_dark',
+    paper_bgcolor='rgba(0,0,0,0)',
+    plot_bgcolor='rgba(22,27,34,0.9)',
+    font=dict(color='#8b949e'),
+)
+
+def range_buttons():
+    return dict(
+        buttons=[
+            dict(count=1,  label='1M', step='month', stepmode='backward'),
+            dict(count=3,  label='3M', step='month', stepmode='backward'),
+            dict(count=6,  label='6M', step='month', stepmode='backward'),
+            dict(count=1,  label='1Y', step='year',  stepmode='backward'),
+            dict(step='all', label='All'),
+        ],
+        font=dict(color='#e6edf3'),
+        bgcolor='#21262d',
+        activecolor='#388bfd',
+    )
+
+
+def price_chart(df, stock):
+    has_vol = 'Volume' in df.columns
+    fig = make_subplots(
+        rows=2 if has_vol else 1, cols=1,
+        shared_xaxes=True,
+        row_heights=[0.73, 0.27] if has_vol else [1.0],
+        vertical_spacing=0.02
+    )
+    fig.add_trace(go.Candlestick(
+        x=df['Date'], open=df['Open'], high=df['High'],
+        low=df['Low'], close=df['Close'], name='OHLC',
+        increasing=dict(line=dict(color='#26a69a'), fillcolor='#26a69a'),
+        decreasing=dict(line=dict(color='#ef5350'), fillcolor='#ef5350'),
+    ), row=1, col=1)
+    if has_vol:
+        bar_colors = ['#26a69a' if c >= o else '#ef5350' for c, o in zip(df['Close'], df['Open'])]
+        fig.add_trace(go.Bar(x=df['Date'], y=df['Volume'],
+                             name='Volume', marker_color=bar_colors, opacity=0.7), row=2, col=1)
+        fig.update_yaxes(title_text='Volume', row=2, col=1, title_font_size=11)
+    fig.update_layout(
+        title=dict(text=f'<b>{stock}</b> — Candlestick Chart', font=dict(size=17, color='#e6edf3')),
+        height=520,
+        xaxis_rangeslider_visible=False,
+        legend=dict(orientation='h', y=1.04, font=dict(color='#e6edf3')),
+        xaxis=dict(rangeselector=range_buttons(), gridcolor='#21262d'),
+        yaxis=dict(gridcolor='#21262d'),
+        **BASE
+    )
     return fig
 
-def plot_historical_data(df, selected_stock):
-    """Plot historical stock price"""
-    fig, ax = plt.subplots(figsize=(14, 6))
-    ax.plot(df['Date'], df['Close'], linewidth=2, label='Close Price', color='#1f77b4')
-    ax.fill_between(df['Date'], df['Close'], alpha=0.3)
-    ax.set_xlabel('Date', fontsize=11)
-    ax.set_ylabel('Price', fontsize=11)
-    ax.set_title(f'Historical Price - {selected_stock}', fontsize=14, fontweight='bold')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    return fig
 
-def plot_technical_indicators(df):
-    """Plot technical indicators"""
-    fig, axes = plt.subplots(3, 1, figsize=(14, 10))
-    
-    # Price with Moving Averages
-    axes[0].plot(df['Date'], df['Close'], label='Close Price', linewidth=2)
-    axes[0].plot(df['Date'], df['MA_7'], label='MA7', linewidth=1.5, alpha=0.7)
-    axes[0].plot(df['Date'], df['MA_30'], label='MA30', linewidth=1.5, alpha=0.7)
-    axes[0].set_ylabel('Price', fontsize=10)
-    axes[0].set_title('Price with Moving Averages', fontsize=12, fontweight='bold')
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
-    
+def technical_chart(df):
+    fig = make_subplots(
+        rows=4, cols=1, shared_xaxes=True,
+        row_heights=[0.40, 0.20, 0.20, 0.20],
+        vertical_spacing=0.025,
+        subplot_titles=['Price + Moving Averages', 'Bollinger Bands', 'RSI (14)', 'MACD']
+    )
+    # Price + MAs
+    fig.add_trace(go.Scatter(x=df['Date'], y=df['Close'], name='Close',
+                             line=dict(color='#58a6ff', width=2)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df['Date'], y=df['MA_7'],  name='MA 7',
+                             line=dict(color='#f0b429', width=1.5, dash='dot')), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df['Date'], y=df['MA_30'], name='MA 30',
+                             line=dict(color='#3fb950', width=1.5, dash='dash')), row=1, col=1)
+    # Bollinger
+    fig.add_trace(go.Scatter(x=df['Date'], y=df['BB_Upper'], name='BB Upper',
+                             line=dict(color='#8b949e', width=1)), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df['Date'], y=df['BB_Lower'], name='BB Lower',
+                             fill='tonexty', fillcolor='rgba(139,148,158,0.12)',
+                             line=dict(color='#8b949e', width=1)), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df['Date'], y=df['Close'], name='Close',
+                             line=dict(color='#58a6ff', width=1.5), showlegend=False), row=2, col=1)
     # RSI
-    axes[1].plot(df['Date'], df['RSI'], label='RSI', color='orange', linewidth=2)
-    axes[1].axhline(y=70, color='r', linestyle='--', linewidth=1, label='Overbought (70)')
-    axes[1].axhline(y=30, color='g', linestyle='--', linewidth=1, label='Oversold (30)')
-    axes[1].set_ylabel('RSI', fontsize=10)
-    axes[1].set_title('Relative Strength Index', fontsize=12, fontweight='bold')
-    axes[1].set_ylim([0, 100])
-    axes[1].legend()
-    axes[1].grid(True, alpha=0.3)
-    
+    fig.add_trace(go.Scatter(x=df['Date'], y=df['RSI'], name='RSI',
+                             line=dict(color='#d2a8ff', width=2)), row=3, col=1)
+    fig.add_hline(y=70, line_dash='dash', line_color='#ef5350', line_width=1, row=3, col=1)
+    fig.add_hline(y=30, line_dash='dash', line_color='#26a69a', line_width=1, row=3, col=1)
+    fig.add_hrect(y0=70, y1=100, fillcolor='rgba(239,83,80,0.06)',  line_width=0, row=3, col=1)
+    fig.add_hrect(y0=0,  y1=30,  fillcolor='rgba(38,166,154,0.06)', line_width=0, row=3, col=1)
     # MACD
-    axes[2].plot(df['Date'], df['MACD'], label='MACD', linewidth=2)
-    axes[2].plot(df['Date'], df['Signal_Line'], label='Signal Line', linewidth=1.5, alpha=0.7)
-    axes[2].bar(df['Date'], df['MACD'] - df['Signal_Line'], label='Histogram', alpha=0.3)
-    axes[2].set_ylabel('MACD', fontsize=10)
-    axes[2].set_xlabel('Date', fontsize=10)
-    axes[2].set_title('MACD Indicator', fontsize=12, fontweight='bold')
-    axes[2].legend()
-    axes[2].grid(True, alpha=0.3)
-    
-    plt.xticks(rotation=45)
-    plt.tight_layout()
+    hist = df['MACD'] - df['Signal_Line']
+    fig.add_trace(go.Bar(x=df['Date'], y=hist, name='Histogram',
+                         marker_color=['#26a69a' if v >= 0 else '#ef5350' for v in hist],
+                         opacity=0.6), row=4, col=1)
+    fig.add_trace(go.Scatter(x=df['Date'], y=df['MACD'],        name='MACD',
+                             line=dict(color='#58a6ff', width=1.8)), row=4, col=1)
+    fig.add_trace(go.Scatter(x=df['Date'], y=df['Signal_Line'], name='Signal',
+                             line=dict(color='#f0b429', width=1.5)), row=4, col=1)
+
+    for ann in fig['layout']['annotations']:
+        ann['font'] = dict(color='#8b949e', size=11)
+
+    fig.update_layout(
+        height=700,
+        legend=dict(orientation='h', y=1.03, font=dict(color='#e6edf3', size=11)),
+        xaxis=dict(rangeselector=range_buttons(), gridcolor='#21262d'),
+        yaxis=dict(gridcolor='#21262d'),
+        **BASE
+    )
+    fig.update_yaxes(range=[0, 100], row=3, col=1)
     return fig
 
-# =====================================================
-# MAIN APP
-# =====================================================
+
+def predictions_chart(y_test, results):
+    names  = list(results.keys())
+    colors = ['#58a6ff', '#3fb950', '#f0b429']
+    fig = make_subplots(rows=1, cols=len(names), subplot_titles=names, horizontal_spacing=0.06)
+    for i, (name, res) in enumerate(results.items()):
+        x = list(range(len(y_test)))
+        fig.add_trace(go.Scatter(x=x, y=y_test, name='Actual',
+                                 line=dict(color='#8b949e', width=2),
+                                 showlegend=(i == 0)), row=1, col=i+1)
+        fig.add_trace(go.Scatter(x=x, y=res['predictions'], name=name,
+                                 line=dict(color=colors[i], width=2)), row=1, col=i+1)
+    for ann in fig['layout']['annotations']:
+        ann['font'] = dict(color='#8b949e', size=12)
+    fig.update_layout(height=380, legend=dict(orientation='h', y=1.1, font=dict(color='#e6edf3')), **BASE)
+    return fig
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    st.title("📈 Stock Price Prediction with Machine Learning")
-    st.markdown("---")
-    
     # Sidebar
     with st.sidebar:
-        st.header("Configuration")
-        st.markdown("---")
-        
-        # File upload option
-        st.subheader("📁 Data Upload")
+        st.markdown("## 📈 Stock Analyzer")
+        st.markdown("<hr style='border-color:#30363d;margin:8px 0 16px'>", unsafe_allow_html=True)
+        st.markdown("#### 📁 Upload Data")
         uploaded_files = st.file_uploader(
-            "Upload CSV files (or use default path)",
+            "CSV files",
             type=['csv'],
             accept_multiple_files=True,
-            help="Upload your stock data CSV files"
+            help="Columns needed: Date, Open, Close, High, Low, country, stock"
         )
-        
-        st.markdown("---")
-        
-        # Model parameters
-        st.subheader("⚙️ Model Parameters")
-        test_size = st.slider(
-            "Test Size (%)",
-            min_value=10,
-            max_value=50,
-            value=20,
-            help="Percentage of data to use for testing"
-        )
-        
-        lookback = st.slider(
-            "Lookback Window",
-            min_value=7,
-            max_value=60,
-            value=30,
-            help="Number of days to look back for sequence creation"
-        )
-    
-    # Main content
-    if uploaded_files:
-        # Load data from uploaded files
-        file_paths = [file.name for file in uploaded_files]
-        dfs = []
-        for uploaded_file in uploaded_files:
-            df_temp = pd.read_csv(uploaded_file)
-            if 'Unnamed: 0' in df_temp.columns:
-                df_temp = df_temp.drop('Unnamed: 0', axis=1)
-            dfs.append(df_temp)
-        
-        df = pd.concat(dfs, axis=0, ignore_index=True)
-    else:
-        # Default file paths
-        st.info("📌 Upload CSV files above to use custom data. Default paths will be attempted.")
-        file_paths = [
-            '../yfinance_projects/stock_H.1.csv',
-            '../yfinance_projects/stock_H.csv',
-            '../yfinance_projects/stock_I.csv',
-            '../yfinance_projects/stock_In.csv',
-            '../yfinance_projects/stock_Ind.csv',
-            '../yfinance_projects/stock_L1.csv',
-            '../yfinance_projects/stock_L2.csv',
-            '../yfinance_projects/stock_L3.csv',
-            '../yfinance_projects/stock_USA.csv'
-        ]
-        
-        dfs = []
-        for file_path in file_paths:
-            try:
-                df_temp = pd.read_csv(file_path)
-                if 'Unnamed: 0' in df_temp.columns:
-                    df_temp = df_temp.drop('Unnamed: 0', axis=1)
-                dfs.append(df_temp)
-            except FileNotFoundError:
-                st.warning(f"⚠️ Could not load {file_path}")
-                continue
-            except Exception as e:
-                st.warning(f"⚠️ Error loading {file_path}: {str(e)}")
-                continue
-        
-        if len(dfs) == 0:
-            st.error("❌ No data files found. Please upload CSV files to get started.")
-            st.info("""
-            **Required CSV Format:**
-            - Columns: Date, Open, Close, High, Low, country, stock
-            - Example: 2023-01-01, 150.00, 152.50, 153.00, 149.50, USA, AAPL
-            """)
+        st.markdown("<hr style='border-color:#30363d;margin:12px 0'>", unsafe_allow_html=True)
+        st.markdown("""
+<div style='font-size:0.78rem;color:#8b949e;line-height:1.9'>
+<b style='color:#e6edf3'>Required columns</b><br>
+• <code>Date</code> — YYYY-MM-DD<br>
+• <code>Open / Close / High / Low</code><br>
+• <code>country</code> — e.g. USA, IND<br>
+• <code>stock</code> — e.g. AAPL, TCS<br>
+• <code>Volume</code> — optional
+</div>""", unsafe_allow_html=True)
+
+    # Header
+    st.markdown("""
+<div style='margin-bottom:1.5rem'>
+  <h1 style='color:#e6edf3;margin:0;font-size:2rem;font-weight:800'>📊 Stock Price Analyzer</h1>
+  <p style='color:#8b949e;margin:4px 0 0;font-size:0.9rem'>
+    Technical analysis &nbsp;·&nbsp; Chart patterns &nbsp;·&nbsp; ML predictions
+  </p>
+</div>""", unsafe_allow_html=True)
+
+    # Empty state
+    if not uploaded_files:
+        st.markdown("""
+<div style='background:#161b22;border:1px dashed #30363d;border-radius:14px;
+            padding:60px 40px;text-align:center;margin-top:60px'>
+  <div style='font-size:3.5rem;margin-bottom:12px'>📂</div>
+  <h3 style='color:#e6edf3;margin:0 0 8px'>Upload your stock CSV to get started</h3>
+  <p style='color:#8b949e;margin:0'>Use the sidebar uploader · Required: Date, Open, Close, High, Low, country, stock</p>
+</div>""", unsafe_allow_html=True)
+        st.stop()
+
+    # Load
+    dfs = []
+    for f in uploaded_files:
+        tmp = pd.read_csv(f)
+        if 'Unnamed: 0' in tmp.columns:
+            tmp = tmp.drop('Unnamed: 0', axis=1)
+        dfs.append(tmp)
+    df = pd.concat(dfs, ignore_index=True)
+
+    if df is None or len(df) == 0:
+        st.error("❌ No data loaded.")
+        st.stop()
+
+    try:
+        df['Date'] = pd.to_datetime(df['Date'])
+    except Exception:
+        st.error("❌ Could not parse the 'Date' column.")
+        st.stop()
+
+    for col in ['country', 'stock']:
+        if col not in df.columns:
+            st.error(f"❌ Missing required column: '{col}'")
             st.stop()
-        
-        df = pd.concat(dfs, axis=0, ignore_index=True)
-    
-    if df is not None and len(df) > 0:
-        try:
-            # Data preparation
-            if 'Date' in df.columns:
-                df['Date'] = pd.to_datetime(df['Date'])
-            
-            # Check if required columns exist
-            if 'country' not in df.columns or 'stock' not in df.columns:
-                st.error("❌ Error: Your CSV file must contain 'country' and 'stock' columns.")
-                st.info("""
-                **Required columns:**
-                - Date (YYYY-MM-DD format)
-                - Open, Close, High, Low (prices)
-                - country (country code, e.g., USA, IND)
-                - stock (stock symbol, e.g., AAPL, TCS)
-                """)
-                st.stop()
-            
-            # Select country
-            st.subheader("🌍 Select Country & Stock")
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                countries = sorted(df['country'].unique())
-                if len(countries) == 0:
-                    st.error("❌ No country data found. Please check your CSV file.")
-                    st.stop()
-                selected_country = st.selectbox(
-                    "Select Country",
-                    countries,
-                    key='country_select'
-                )
-            
-            # Filter by country
-            country_data = df[df['country'] == selected_country]
-            
-            with col2:
-                stocks = sorted(country_data['stock'].unique())
-                if len(stocks) == 0:
-                    st.error(f"❌ No stocks found for {selected_country}")
-                    st.stop()
-                selected_stock = st.selectbox(
-                    "Select Stock",
-                    stocks,
-                    key='stock_select'
-                )
-            
-            # Filter by stock
-            stock_data = country_data[country_data['stock'] == selected_stock].copy()
-        
-            if len(stock_data) > lookback + 10:
-                st.markdown("---")
-                
-                # Display data info
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Total Records", len(stock_data))
-                with col2:
-                    st.metric("Current Price", f"${stock_data['Close'].iloc[-1]:.2f}")
-                with col3:
-                    price_change = stock_data['Close'].iloc[-1] - stock_data['Close'].iloc[0]
-                    st.metric("Change", f"${price_change:.2f}", delta=f"{(price_change/stock_data['Close'].iloc[0]*100):.2f}%")
-                with col4:
-                    st.metric("Volatility", f"{stock_data['Close'].pct_change().std()*100:.2f}%")
-                
-                st.markdown("---")
-                
-                # Tabs for different sections
-                tab1, tab2, tab3, tab4, tab5 = st.tabs([
-                    "📊 Historical Data", 
-                    "📈 Technical Indicators", 
-                    "🤖 ML Models", 
-                    "📋 Feature Analysis",
-                    "📉 Data Overview"
-                ])
-                
-                # Tab 1: Historical Data
-                with tab1:
-                    st.subheader(f"Historical Price Data - {selected_stock}")
-                    fig = plot_historical_data(stock_data, selected_stock)
-                    st.pyplot(fig)
-                
-                # Tab 2: Technical Indicators
-                with tab2:
-                    st.subheader(f"Technical Indicators - {selected_stock}")
-                    stock_data_engineered = engineer_features(stock_data)
-                    if len(stock_data_engineered) > 0:
-                        fig = plot_technical_indicators(stock_data_engineered)
-                        st.pyplot(fig)
-                    else:
-                        st.warning("Not enough data to calculate indicators")
-                
-                # Tab 3: ML Models
-                with tab3:
-                    st.subheader("🤖 Machine Learning Models")
-                    
-                    if st.button("Train Models", use_container_width=True):
-                        with st.spinner("Engineering features and training models..."):
-                            # Feature engineering
-                            stock_data_engineered = engineer_features(stock_data)
-                            
-                            if len(stock_data_engineered) > lookback + 10:
-                                # Prepare data
-                                X, y, scaler, features = prepare_ml_data(stock_data_engineered, lookback=lookback)
-                                
-                                # Split data
-                                X_train, X_test, y_train, y_test = train_test_split(
-                                    X, y, test_size=test_size/100, shuffle=False
-                                )
-                                
-                                # Train models
-                                models, results = train_models(X_train, y_train, X_test, y_test)
-                                
-                                # Display results
-                                st.success("✅ Models trained successfully!")
-                                
-                                # Model comparison
-                                st.markdown("### Model Performance Comparison")
-                                
-                                results_df = pd.DataFrame({
-                                    'Model': list(results.keys()),
-                                    'MAE': [results[m]['MAE'] for m in results.keys()],
-                                    'RMSE': [results[m]['RMSE'] for m in results.keys()],
-                                    'R² Score': [results[m]['R2'] for m in results.keys()]
-                                })
-                                
-                                st.dataframe(results_df, use_container_width=True)
-                                
-                                # Best model
-                                best_model = max(results.keys(), key=lambda x: results[x]['R2'])
-                                col1, col2, col3 = st.columns(3)
-                                with col1:
-                                    st.metric("Best Model", best_model)
-                                with col2:
-                                    st.metric("Best R² Score", f"{results[best_model]['R2']:.4f}")
-                                with col3:
-                                    st.metric("Best RMSE", f"${results[best_model]['RMSE']:.2f}")
-                                
-                                # Plot predictions
-                                st.markdown("### Predictions Comparison")
-                                fig = plot_predictions(y_test, results)
-                                st.pyplot(fig)
-                            else:
-                                st.warning("❌ Not enough data to train models with selected lookback window")
-                
-                # Tab 4: Feature Analysis
-                with tab4:
-                    st.subheader("📊 Feature Engineering Analysis")
-                    stock_data_engineered = engineer_features(stock_data)
-                    
-                    if len(stock_data_engineered) > 0:
-                        # Display engineered features
-                        st.markdown("### Available Features")
-                        
-                        feature_cols = [col for col in stock_data_engineered.columns 
-                                       if col not in ['Date', 'country', 'stock', 'Open', 'Close', 'High', 'Low']]
-                        
-                        col_pairs = st.multiselect(
-                            "Select features to visualize",
-                            feature_cols,
-                            default=['MA_7', 'MA_30', 'RSI'],
-                            max_selections=3
-                        )
-                        
-                        if col_pairs:
-                            fig, axes = plt.subplots(len(col_pairs), 1, figsize=(14, 4*len(col_pairs)))
-                            if len(col_pairs) == 1:
-                                axes = [axes]
-                            
-                            for idx, feature in enumerate(col_pairs):
-                                axes[idx].plot(stock_data_engineered['Date'], stock_data_engineered[feature], 
-                                              linewidth=2, color='#1f77b4')
-                                axes[idx].set_ylabel(feature, fontsize=10)
-                                axes[idx].set_title(f'{feature} Over Time', fontsize=12, fontweight='bold')
-                                axes[idx].grid(True, alpha=0.3)
-                            
-                            plt.xticks(rotation=45)
-                            plt.tight_layout()
-                            st.pyplot(fig)
-                        
-                        # Feature statistics
-                        st.markdown("### Feature Statistics")
-                        stats_df = stock_data_engineered[feature_cols].describe()
-                        st.dataframe(stats_df, use_container_width=True)
-                
-                # Tab 5: Data Overview
-                with tab5:
-                    st.subheader("📋 Data Overview")
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.markdown("### First Few Rows")
-                        st.dataframe(stock_data.head(10), use_container_width=True)
-                    
-                    with col2:
-                        st.markdown("### Data Statistics")
-                        st.dataframe(stock_data[['Open', 'Close', 'High', 'Low']].describe(), use_container_width=True)
-                    
-                    st.markdown("### Data Types")
-                    st.info(f"**Shape:** {stock_data.shape[0]} rows × {stock_data.shape[1]} columns")
-                    st.dataframe(pd.DataFrame({
-                        'Column': stock_data.columns,
-                        'Data Type': stock_data.dtypes
-                    }), use_container_width=True)
-            else:
-                st.error(f"❌ Not enough data for {selected_stock}. Need at least {lookback + 10} records.")
-        except Exception as e:
-            st.error(f"❌ An error occurred: {str(e)}")
-    else:
-        st.error("❌ Unable to load data. Please check the file paths or upload CSV files.")
+
+    # Stock selector
+    c1, c2, _ = st.columns([1, 1, 3])
+    with c1:
+        selected_country = st.selectbox("🌍 Country", sorted(df['country'].unique()))
+    country_data = df[df['country'] == selected_country]
+    with c2:
+        selected_stock = st.selectbox("📌 Stock", sorted(country_data['stock'].unique()))
+
+    stock_data = country_data[country_data['stock'] == selected_stock].copy()
+    stock_data = stock_data.sort_values('Date').reset_index(drop=True)
+
+    LOOKBACK = 30
+    if len(stock_data) < LOOKBACK + 10:
+        st.error(f"❌ Not enough data for {selected_stock}. Need at least {LOOKBACK + 10} rows.")
+        st.stop()
+
+    # KPI row
+    latest  = stock_data['Close'].iloc[-1]
+    first   = stock_data['Close'].iloc[0]
+    change  = latest - first
+    pct_chg = change / first * 100
+    vol     = stock_data['Close'].pct_change().std() * 100
+    high52  = stock_data['Close'].tail(252).max()
+    low52   = stock_data['Close'].tail(252).min()
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("Current Price", f"${latest:.2f}")
+    k2.metric("Total Change",  f"${change:.2f}", delta=f"{pct_chg:.2f}%")
+    k3.metric("Volatility",    f"{vol:.2f}%")
+    k4.metric("52W High",      f"${high52:.2f}")
+    k5.metric("52W Low",       f"${low52:.2f}")
+
+    st.markdown("<div style='margin:14px 0'></div>", unsafe_allow_html=True)
+
+    # Tabs
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📊 Price Chart",
+        "📈 Technical Indicators",
+        "🔍 Chart Patterns",
+        "🤖 ML Models",
+        "📋 Data Overview",
+    ])
+
+    # ── Tab 1: Price Chart ──────────────────────────────────────────────
+    with tab1:
+        st.markdown(f"#### {selected_stock} — Interactive Candlestick")
+        st.markdown("<p style='color:#8b949e;font-size:0.82rem'>🖱 Drag to zoom · Scroll to pan · Use range buttons above chart</p>",
+                    unsafe_allow_html=True)
+        st.plotly_chart(price_chart(stock_data, selected_stock), use_container_width=True)
+
+    # ── Tab 2: Technical Indicators ─────────────────────────────────────
+    with tab2:
+        eng = engineer_features(stock_data)
+        if len(eng) == 0:
+            st.warning("Not enough data to compute indicators.")
+        else:
+            st.markdown(f"#### {selected_stock} — Technical Indicators")
+            st.markdown("<p style='color:#8b949e;font-size:0.82rem'>🖱 All panels share the same x-axis — drag any panel to zoom all</p>",
+                        unsafe_allow_html=True)
+            st.plotly_chart(technical_chart(eng), use_container_width=True)
+
+    # ── Tab 3: Chart Patterns ───────────────────────────────────────────
+    with tab3:
+        eng3     = engineer_features(stock_data)
+        patterns = detect_patterns(eng3)
+
+        st.markdown(f"#### {selected_stock} — Detected Chart Patterns")
+
+        if not patterns:
+            st.info("No strong patterns detected in the current data window.")
+        else:
+            bull = [p for p in patterns if p['type'] == 'bullish']
+            bear = [p for p in patterns if p['type'] == 'bearish']
+            neut = [p for p in patterns if p['type'] == 'neutral']
+
+            bc1, bc2, bc3 = st.columns(3)
+            bc1.metric("🟢 Bullish Signals", len(bull))
+            bc2.metric("🔴 Bearish Signals", len(bear))
+            bc3.metric("🟡 Watch Signals",   len(neut))
+
+            st.markdown("<div style='margin-top:16px'></div>", unsafe_allow_html=True)
+
+            SIG_BG  = {'BUY':'#1a3a2a','SELL':'#3a1a1a','WATCH':'#2a2a10','CAUTION':'#3a2a10'}
+            SIG_COL = {'BUY':'#3fb950','SELL':'#ef5350','WATCH':'#f0b429','CAUTION':'#ffa657'}
+            TYPE_BORDER = {'bullish':'#26a69a','bearish':'#ef5350','neutral':'#f0b429'}
+
+            for p in patterns:
+                border = TYPE_BORDER[p['type']]
+                sbg    = SIG_BG.get(p['signal'], '#21262d')
+                scol   = SIG_COL.get(p['signal'], '#e6edf3')
+                st.markdown(f"""
+<div style='background:#161b22;border:1px solid #30363d;border-left:4px solid {border};
+            border-radius:10px;padding:16px 20px;margin-bottom:10px;
+            display:flex;align-items:center;gap:16px'>
+  <div style='flex:1'>
+    <div style='font-size:0.97rem;font-weight:700;color:#e6edf3;margin-bottom:3px'>{p['name']}</div>
+    <div style='font-size:0.83rem;color:#8b949e'>{p['desc']}</div>
+  </div>
+  <div style='background:{sbg};color:{scol};border-radius:6px;
+              padding:4px 12px;font-size:0.78rem;font-weight:700;white-space:nowrap'>
+    {p['signal']}
+  </div>
+</div>""", unsafe_allow_html=True)
+
+        # Pattern context chart
+        st.markdown("#### Price with Pattern Context")
+        pfig = go.Figure()
+        pfig.add_trace(go.Scatter(x=eng3['Date'], y=eng3['Close'],   name='Close',
+                                  line=dict(color='#58a6ff', width=2)))
+        pfig.add_trace(go.Scatter(x=eng3['Date'], y=eng3['MA_7'],    name='MA 7',
+                                  line=dict(color='#f0b429', width=1.5, dash='dot')))
+        pfig.add_trace(go.Scatter(x=eng3['Date'], y=eng3['MA_30'],   name='MA 30',
+                                  line=dict(color='#3fb950', width=1.5, dash='dash')))
+        pfig.add_trace(go.Scatter(x=eng3['Date'], y=eng3['BB_Upper'],name='BB Upper',
+                                  line=dict(color='#8b949e', width=1, dash='dot')))
+        pfig.add_trace(go.Scatter(x=eng3['Date'], y=eng3['BB_Lower'],name='BB Lower',
+                                  fill='tonexty', fillcolor='rgba(139,148,158,0.08)',
+                                  line=dict(color='#8b949e', width=1, dash='dot')))
+        pfig.update_layout(
+            height=380,
+            legend=dict(orientation='h', y=1.06, font=dict(color='#e6edf3', size=11)),
+            xaxis=dict(rangeselector=range_buttons(), gridcolor='#21262d'),
+            yaxis=dict(gridcolor='#21262d'),
+            **BASE
+        )
+        st.plotly_chart(pfig, use_container_width=True)
+
+    # ── Tab 4: ML Models ────────────────────────────────────────────────
+    with tab4:
+        st.markdown("#### Machine Learning Price Prediction")
+        st.markdown("<p style='color:#8b949e;font-size:0.85rem'>Trains Linear Regression, Random Forest and Gradient Boosting on engineered technical features.</p>",
+                    unsafe_allow_html=True)
+
+        col_btn, _ = st.columns([1, 3])
+        with col_btn:
+            run = st.button("🚀 Train Models", use_container_width=True)
+
+        if run:
+            with st.spinner("Engineering features & training models…"):
+                eng4 = engineer_features(stock_data)
+                if len(eng4) < LOOKBACK + 10:
+                    st.warning("Not enough data after feature engineering.")
+                else:
+                    X, y, scaler, feats = prepare_ml_data(eng4, lookback=LOOKBACK)
+                    X_train, X_test, y_train, y_test = train_test_split(
+                        X, y, test_size=0.2, shuffle=False
+                    )
+                    mdls, res = train_models(X_train, y_train, X_test, y_test)
+                    st.success("✅ Models trained successfully!")
+
+                    res_df = pd.DataFrame({
+                        'Model':    list(res.keys()),
+                        'MAE':      [f"{res[m]['MAE']:.4f}"  for m in res],
+                        'RMSE':     [f"{res[m]['RMSE']:.4f}" for m in res],
+                        'R² Score': [f"{res[m]['R2']:.4f}"   for m in res],
+                    })
+                    st.markdown("##### Model Performance")
+                    st.dataframe(res_df, use_container_width=True, hide_index=True)
+
+                    best = max(res, key=lambda m: res[m]['R2'])
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("🏆 Best Model", best)
+                    m2.metric("Best R²",       f"{res[best]['R2']:.4f}")
+                    m3.metric("Best RMSE",     f"${res[best]['RMSE']:.4f}")
+
+                    st.markdown("##### Predictions vs Actual")
+                    st.plotly_chart(predictions_chart(y_test, res), use_container_width=True)
+
+    # ── Tab 5: Data Overview ────────────────────────────────────────────
+    with tab5:
+        st.markdown("#### Raw Data Overview")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**First 10 rows**")
+            st.dataframe(stock_data.head(10), use_container_width=True, hide_index=True)
+        with c2:
+            st.markdown("**Price Statistics**")
+            cols_stat = [c for c in ['Open','Close','High','Low'] if c in stock_data.columns]
+            st.dataframe(stock_data[cols_stat].describe().round(4), use_container_width=True)
+        st.markdown(f"**Shape:** `{stock_data.shape[0]} rows × {stock_data.shape[1]} columns`")
+        st.dataframe(pd.DataFrame({
+            'Column': stock_data.columns,
+            'Type':   stock_data.dtypes.astype(str)
+        }), use_container_width=True, hide_index=True)
+
 
 if __name__ == "__main__":
     main()
+
