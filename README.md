@@ -240,87 +240,6 @@ Upload your stock CSV files through the sidebar
 
 ---
 
-## 🔧 Configuration Guide
-
-### Adjusting Model Parameters
-
-#### In `stock_ml_streamlit_app.py`:
-
-**Random Forest**
-```python
-rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-```
-- Increase `n_estimators` for more trees (better but slower)
-- Adjust `max_depth` to prevent overfitting
-
-**Gradient Boosting**
-```python
-gb = GradientBoostingRegressor(n_estimators=100, random_state=42)
-```
-- Adjust `learning_rate` for step size (default 0.1)
-- Increase `max_depth` for complexity
-
-**Neural Network**
-```python
-nn = MLPRegressor(hidden_layer_sizes=(100, 50), max_iter=1000, random_state=42)
-```
-- Modify hidden layer sizes: `(100, 50, 25)` for deeper network
-- Increase `max_iter` for more training iterations
-
----
-
-## 📊 CSV File Format
-
-Your CSV files should have this structure:
-
-```
-Date,Open,Close,High,Low,Volume,country,stock
-2023-01-01,150.00,152.50,153.00,149.50,1000000,USA,AAPL
-2023-01-02,152.50,155.00,156.00,152.00,1200000,USA,AAPL
-...
-```
-
-### Required Columns:
-- `Date` - Trading date
-- `Open` - Opening price
-- `Close` - Closing price
-- `High` - Highest price of the day
-- `Low` - Lowest price of the day
-- `country` - Country code
-- `stock` - Stock symbol
-
-### Optional Columns:
-- `Volume` - Trading volume
-- `Unnamed: 0` - Will be removed automatically
-
----
-
-## 🐛 Troubleshooting
-
-### Issue: "Not enough data"
-**Solution**: Make sure you have at least 50+ records per stock and adjust lookback window
-
-### Issue: Models not training
-**Solution**: 
-- Check data format and column names
-- Ensure dates are properly formatted
-- Verify no missing values in critical columns
-
-### Issue: Slow performance
-**Solution**:
-- Reduce number of records
-- Lower number of estimators in ensemble models
-- Reduce neural network size
-
-### Issue: High RMSE/MAE values
-**Solution**:
-- Increase lookback window
-- Add more training data
-- Try different model parameters
-- Check data quality
-
----
-
 ## 📚 Feature Explanations
 
 ### Technical Indicators
@@ -351,18 +270,6 @@ Date,Open,Close,High,Low,Volume,country,stock
 
 ---
 
-## 🎓 Learning Resources
-
-### Machine Learning Concepts
-- [Scikit-learn Documentation](https://scikit-learn.org/)
-- [Streamlit Documentation](https://docs.streamlit.io/)
-
-### Stock Market Analysis
-- [Technical Analysis Guide](https://www.investopedia.com/terms/t/technicalanalysis.asp)
-- [Stock Indicators Explained](https://www.investopedia.com/terms/t/technicalanalysis.asp)
-
----
-
 ## 📄 License
 
 This project is open source and available under the MIT License.
@@ -388,17 +295,6 @@ For issues or questions:
 2. Review your data format
 3. Check Streamlit and scikit-learn documentation
 4. Ensure all dependencies are installed correctly
-
----
-
-## 🎯 Next Steps
-
-1. **Prepare your data** in CSV format
-2. **Install requirements**: `pip install -r requirements.txt`
-3. **Run the app**: `streamlit run stock_ml_streamlit_app.py`
-4. **Upload data** and explore
-5. **Train models** and analyze predictions
-6. **Iterate** with different parameters
 
 ---
 
